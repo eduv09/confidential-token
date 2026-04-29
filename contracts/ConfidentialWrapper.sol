@@ -39,12 +39,27 @@ import { IConfidentialWrapper } from "./interfaces/IConfidentialWrapper.sol";
 contract ConfidentialWrapper is ConfidentialToken, ERC20Wrapper, IConfidentialWrapper {
     using SafeERC20 for IERC20;
 
+    struct PendingBurn {
+        address recipient;
+        uint256 value;
+    }
+
     /// @notice Amount of tokens requested to be wrapped
     /// @dev Almost always equals to zero
     /// @dev Has non-zero value only before the callback call is made
     mapping (address holder => uint256 value) public requestedMints;
 
+    /// @notice Pending burn initiated by `withdrawTo`, awaiting CTX to finalize
+    /// @dev `value` is non-zero only between `withdrawTo` and its `_onBurn` callback
+    /// @dev At most one pending withdraw per `from` is allowed; this is what
+    ///      lets the recipient survive across the async CTX boundary without
+    ///      threading data through `ConfidentialToken`
+    mapping (address holder => PendingBurn pending) public pendingBurns;
+
     error OutdatedMint(address to, uint256 value);
+    error OutdatedBurn(address from, uint256 value);
+    error WithdrawalPending(address from);
+    error NoPendingWithdrawal(address from);
 
     constructor(
         IERC20Metadata underlyingToken,
@@ -66,6 +81,13 @@ contract ConfidentialWrapper is ConfidentialToken, ERC20Wrapper, IConfidentialWr
     function releaseTo(address account, uint256 value) external override {
         requestedMints[msg.sender] -= value;
         underlying().safeTransfer(account, value);
+    }
+
+    /// @inheritdoc IConfidentialWrapper
+    function cancelWithdrawTo() external override {
+        PendingBurn storage pending = pendingBurns[msg.sender];
+        require(pending.value != 0, NoPendingWithdrawal(msg.sender));
+        delete pendingBurns[msg.sender];
     }
 
     // Public functions
@@ -90,7 +112,7 @@ contract ConfidentialWrapper is ConfidentialToken, ERC20Wrapper, IConfidentialWr
         if (account == address(this)) {
             revert ERC20InvalidReceiver(account);
         }
-        _burn(_msgSender(), value);
+        _burnTo(_msgSender(), account, value);
         return true;
     }
 
@@ -110,6 +132,14 @@ contract ConfidentialWrapper is ConfidentialToken, ERC20Wrapper, IConfidentialWr
     }
 
     // Internal functions
+
+    function _burnTo(address from, address to, uint256 value) internal {
+        PendingBurn storage pending = pendingBurns[from];
+        require(pending.value == 0, WithdrawalPending(from));
+        pending.recipient = to;
+        pending.value = value;
+        _burn(from, value);
+    }
 
     function _onUpdate(address from, address to, uint256 value) internal override {
         ConfidentialToken._onUpdate(from, to, value);
@@ -137,6 +167,9 @@ contract ConfidentialWrapper is ConfidentialToken, ERC20Wrapper, IConfidentialWr
     }
 
     function _onBurn(address from, uint256 value) private {
-        underlying().safeTransfer(from, value);
+        PendingBurn memory pending = pendingBurns[from];
+        require(pending.value == value, OutdatedBurn(from, value));
+        delete pendingBurns[from];
+        underlying().safeTransfer(pending.recipient, value);
     }
 }
