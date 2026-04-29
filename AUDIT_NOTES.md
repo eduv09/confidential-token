@@ -75,7 +75,7 @@
 7. Unbounded resubmission loop in stale state — each resubmission consumes another fee from gasPayer with no cap. MEDIUM.
 
 ### LOW
-8. `_isValidPublicKey` accepts degenerate key with x=0 and y=0 check being OR not AND — keys where one coordinate is zero are technically invalid secp256k1 points. LOW.
+8. `_isValidPublicKey` accepts degenerate keys — the check uses OR instead of AND, so a key where only one coordinate is zero passes validation, but such points are not valid on secp256k1. LOW.
 9. ERC20 Transfer event not emitted (shadow issue) — custom Transfer(from, to) overrides ERC20 Transfer(from, to, uint256). LOW.
 10. No access control on `releaseTo` for arbitrary account destination — anyone who has deposited can redirect their locked tokens to any address. LOW.
 11. Solidity 0.8.30 with evmVersion istanbul — using newer Solidity features with an older EVM target could generate invalid opcodes for some features. LOW.
